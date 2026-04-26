@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import html
 import json
 import secrets
@@ -8,7 +9,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from segmentation_engine import AccessLog, LoginStatus, Session, default_app
+from segmentation_engine import AccessLog, Decision, LoginStatus, Session, default_app
 
 
 APP = default_app()
@@ -287,6 +288,46 @@ def page_template(title: str, body: str) -> str:
       background: #fff;
       border: 1px solid var(--line);
     }}
+    .banner {{
+      animation: slideIn 0.5s ease-out;
+    }}
+    @keyframes slideIn {{
+      from {{ transform: translateY(-20px); opacity: 0; }}
+      to {{ transform: translateY(0); opacity: 1; }}
+    }}
+    .tile.safe {{
+      border-color: #067647;
+      background: #f0fdf4;
+    }}
+    .tile.warning {{
+      border-color: #d97706;
+      background: #fffbeb;
+    }}
+    .tile.blocked {{
+      border-color: #b42318;
+      background: #fef2f2;
+    }}
+    .status-indicator {{
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+    }}
+    .status-indicator.normal {{
+      background: #e7f6ec;
+      color: #067647;
+    }}
+    .status-indicator.blocked {{
+      background: #fdecea;
+      color: #b42318;
+      animation: pulse 1s infinite;
+    }}
+    @keyframes pulse {{
+      0%, 100% {{ opacity: 1; }}
+      50% {{ opacity: 0.7; }}
+    }}
     @keyframes blink {{
       0%, 80%, 100% {{ transform: translateY(0); opacity: 0.35; }}
       40% {{ transform: translateY(-3px); opacity: 1; }}
@@ -440,9 +481,26 @@ def sms_inbox_view(username: str) -> str:
         return '<div class="tile">No SMS messages yet.</div>'
     items = []
     for alert in reversed(alerts[-5:]):
+        sender = (
+            "SECURE-SYS"
+            if alert.category == "otp"
+            else "SECURE-ALERT"
+            if alert.category in ("security_alert", "account_lock")
+            else "SECURE-SYS"
+        )
+        status_class = (
+            "safe"
+            if alert.category == "otp"
+            else "blocked"
+            if alert.category in ("security_alert", "account_lock")
+            else "warning"
+        )
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         items.append(
-            '<div class="tile"><strong>{category}</strong><br><span class="meta">{message}</span></div>'.format(
-                category=html.escape(alert.category.replace("_", " ").title()),
+            '<div class="tile {status_class}"><strong>{sender} - {timestamp}</strong><br><span class="meta">{message}</span></div>'.format(
+                status_class=status_class,
+                sender=html.escape(sender),
+                timestamp=html.escape(timestamp),
                 message=html.escape(alert.message),
             )
         )
@@ -455,6 +513,7 @@ def login_view(message: str = "", pending_user: str = "") -> str:
         banner = f'<div class="banner deny">{html.escape(message)}</div>'
     otp_panel = ""
     latest_otp_code = ""
+    ussd_panel = ""
     if pending_user:
         latest_otp = APP.latest_otp_for(pending_user)
         if latest_otp is not None and " is " in latest_otp.message:
@@ -476,6 +535,40 @@ def login_view(message: str = "", pending_user: str = "") -> str:
               </form>
             </div>
             """
+        alerts = APP.sms_alerts_for(pending_user)
+        latest_ussd_otp = APP._pending_ussd_otps.get(pending_user)
+        if latest_ussd_otp:
+            ussd_panel = f"""
+            <div class="card">
+              <h2>USSD Confirmation</h2>
+              <p class="meta">Confirmation code sent by SMS for <strong>{html.escape(pending_user)}</strong>.</p>
+              <form method="post" action="/verify-ussd-otp">
+                <input type="hidden" name="username" value="{html.escape(pending_user)}">
+                <label>Confirmation Code
+                  <input name="ussd_code" inputmode="numeric" required>
+                </label>
+                <div class="actions">
+                  <button type="submit">Verify USSD Code</button>
+                </div>
+              </form>
+            </div>
+            """
+        elif any(a.category == "security_alert" for a in alerts):
+            ussd_panel = f"""
+            <div class="card">
+              <h2>USSD Prompt ☎️</h2>
+              <p>User logs in from suspicious location 🌍, system flags it 🚨, user gets USSD prompt ☎️.</p>
+              <p>SMS alert sent 📩. Approve or deny to update access dynamically 🔐.</p>
+              <form method="post" action="/ussd-approve" style="display:inline">
+                <input type="hidden" name="username" value="{html.escape(pending_user)}">
+                <button type="submit">Approve ✅</button>
+              </form>
+              <form method="post" action="/ussd-deny" style="display:inline">
+                <input type="hidden" name="username" value="{html.escape(pending_user)}">
+                <button type="submit" class="danger">Deny ❌</button>
+              </form>
+            </div>
+            """
     body = f"""
     <div class="card">
       <div class="build-tag">{APP_BUILD}</div>
@@ -494,12 +587,16 @@ def login_view(message: str = "", pending_user: str = "") -> str:
         <label>Password
           <input name="password" type="password" autocomplete="current-password" required>
         </label>
+        <label>
+          <input type="checkbox" name="suspicious_location"> Login from suspicious location 🌍
+        </label>
         <div class="actions">
           <button type="submit">Login</button>
         </div>
       </form>
     </div>
     {otp_panel}
+    {ussd_panel}
     <div class="card">
       <h2>Demo Users</h2>
       <div class="grid">
@@ -511,7 +608,7 @@ def login_view(message: str = "", pending_user: str = "") -> str:
     <div class="card">
       <h2>Local SMS Inbox</h2>
       <div class="grid">
-        {sms_inbox_view(pending_user) if pending_user else '<div class="tile">Enter valid credentials to receive OTP and security alerts here.</div>'}
+        {sms_inbox_view(pending_user) if pending_user else '<div class="tile">Enter valid credentials to receive OTP, security alerts, and risk score notifications here.</div>'}
       </div>
       {'<div class="meta" data-latest-otp="' + html.escape(latest_otp_code) + '">Demo helper ready: click Use Latest OTP.</div>' if pending_user and latest_otp_code else ""}
     </div>
@@ -523,14 +620,34 @@ def dashboard_view(session: Session, message: str = "", status: str = "") -> str
     banner = ""
     if message:
         banner = f'<div class="banner {status}">{html.escape(message)}</div>'
+    blocked = APP._detector.is_blocked(session.username)
+    status_indicator = f'<div class="status-indicator {"blocked" if blocked else "normal"}">Status: {"Blocked 🚨" if blocked else "Normal ✅"}</div>'
     body = f"""
     <div class="card">
       <div class="build-tag">{APP_BUILD}</div>
       <h1>Welcome, {html.escape(session.username)}</h1>
       <p class="meta">Role: {html.escape(session.role)} | Zone: {html.escape(session.zone)}</p>
+      {status_indicator}
       {banner}
-      <div class="actions">
+      <div class="card">
+        <h2>🗺️ Zone Visualization</h2>
+        <div class="zone-map">
+          <div class="zone user-zone {"allowed" if session.zone == "user" else "blocked"}">User Zone<br>{"✅ (Active)" if session.zone == "user" else "❌"}</div>
+          <div class="zone finance-zone {"allowed" if session.zone == "finance" else "blocked"}">Finance Zone<br>{"✅ (Active)" if session.zone == "finance" else "❌"}</div>
+          <div class="zone admin-zone {"allowed" if session.zone == "admin" else "blocked"}">Admin Zone<br>{"✅ (Active)" if session.zone == "admin" else "❌"}</div>
+          <div class="zone ussd-zone limited">USSD Zone<br>⚠ Limited</div>
+        </div>
+         <style>
+           .zone-map {{ display: flex; gap: 10px; justify-content: center; margin: 20px 0; }}
+           .zone {{ padding: 10px; border: 2px solid #ccc; border-radius: 8px; text-align: center; font-weight: bold; }}
+           .zone.allowed {{ background: #e7f6ec; color: #067647; border-color: #067647; }}
+           .zone.blocked {{ background: #fdecea; color: #b42318; border-color: #b42318; }}
+           .zone.limited {{ background: #fffbeb; color: #d97706; border-color: #d97706; }}
+         </style>
+       </div>
+       <div class="actions">
         <a class="button" href="/finance">Try Finance Page</a>
+        <a class="button secondary" href="/ussd">Try USSD Page</a>
         <a class="button secondary" href="/chat">Open Chat Page</a>
         <form method="post" action="/simulate-suspicious" style="display:inline">
           <button class="danger" type="submit">Simulate Suspicious Behavior</button>
@@ -538,6 +655,7 @@ def dashboard_view(session: Session, message: str = "", status: str = "") -> str
         <form method="post" action="/reset-demo" style="display:inline">
           <button class="button secondary" type="submit">Reset Demo</button>
         </form>
+        {'<form method="post" action="/approve-admin-finance" style="display:inline"> <button class="button secondary" type="submit">Approve Finance Access</button> </form>' if session.role == "super_admin" else ""}
         <form method="post" action="/logout" style="display:inline">
           <button class="button secondary" type="submit">Logout</button>
         </form>
@@ -548,15 +666,97 @@ def dashboard_view(session: Session, message: str = "", status: str = "") -> str
       <div class="grid">
         <div class="tile">`normal_user` opening finance should be denied.</div>
         <div class="tile">`finance_user` opening finance should be granted.</div>
-        <div class="tile">After suspicious behavior is simulated, the system blocks access.</div>
+        <div class="tile">USSD: Status checks, Approvals, Limited actions. No Database ❌, No Admin panel ❌.</div>
+        <div class="tile">Failed login: USSD → request action 📱, SMS → send OTP 📩, Backend → verify.</div>
+        <div class="tile">Suspicious location: User logs in 🌍, system flags 🚨, USSD prompt ☎️, approve/deny, dynamic access 🔐.</div>
+        <div class="tile">Suspicious behavior simulation 🚨 blocks access, sends SMS 📩, user confirms via USSD 📱, chatbot explains 💬.</div>
       </div>
     </div>
     <div class="card">
       <h2>SMS Inbox</h2>
-      <div class="grid">
+      <div class="grid" id="sms-inbox">
         {sms_inbox_view(session.username)}
       </div>
     </div>
+    {'<div class="card"><h2>Admin Access Log</h2><div class="insight-list">' + "".join(f'<div class="insight-item">{format_access_log(log)}</div>' for log in APP.access_logs_for(session.username)[-5:]) + "</div></div>" if session.role == "super_admin" else ""}
+    <script>
+    async function checkAccess(url, redirectUrl) {{
+      const response = await fetch(url + '?ajax=yes');
+      const data = await response.json();
+      if (data.decision === 'deny') {{
+        alert('🚨 Access Blocked: ' + data.message);
+        return false;
+      }} else {{
+        window.location.href = redirectUrl;
+        return true;
+      }}
+    }}
+
+    document.addEventListener('DOMContentLoaded', function() {{
+      const financeLink = document.querySelector('a[href="/finance"]');
+      if (financeLink) {{
+        financeLink.addEventListener('click', function(e) {{
+          e.preventDefault();
+          checkAccess('/finance', '/finance');
+        }});
+      }}
+      const ussdLink = document.querySelector('a[href="/ussd"]');
+      if (ussdLink) {{
+        ussdLink.addEventListener('click', function(e) {{
+          e.preventDefault();
+          checkAccess('/ussd', '/ussd');
+        }});
+      }}
+      const chatLink = document.querySelector('a[href="/chat"]');
+      if (chatLink) {{
+        chatLink.addEventListener('click', function(e) {{
+          e.preventDefault();
+          checkAccess('/chat', '/chat');
+        }});
+      }}
+      const simulateForm = document.querySelector('form[action="/simulate-suspicious"]');
+      if (simulateForm) {{
+        simulateForm.addEventListener('submit', function(e) {{
+          alert('🚨 Simulating suspicious behavior... Access will be blocked!');
+        }});
+      }}
+      const resetForm = document.querySelector('form[action="/reset-demo"]');
+      if (resetForm) {{
+        resetForm.addEventListener('submit', function(e) {{
+          if (!confirm('Reset the demo? This will clear all sessions and data.')) {{
+            e.preventDefault();
+          }}
+        }});
+      }}
+      const logoutForm = document.querySelector('form[action="/logout"]');
+      if (logoutForm) {{
+        logoutForm.addEventListener('submit', function(e) {{
+          if (!confirm('Logout?')) {{
+            e.preventDefault();
+          }}
+        }});
+      }}
+
+      async function refreshSMS() {{
+        try {{
+          const response = await fetch('/api/sms-inbox');
+          if (response.ok) {{
+            const html = await response.text();
+            document.getElementById('sms-inbox').innerHTML = html;
+          }}
+        }} catch (error) {{
+          console.error('Failed to refresh SMS:', error);
+        }}
+      }}
+
+      // Refresh immediately if there's a deny banner (e.g., after simulation)
+      if (document.querySelector('.banner.deny')) {{
+        refreshSMS();
+      }}
+
+      setInterval(refreshSMS, 5000); // Refresh every 5 seconds
+    }});
+    </script>
     """
     return page_template("Dashboard", body)
 
@@ -576,6 +776,266 @@ def resource_view(
     </div>
     """
     return page_template(title, body)
+
+
+def finance_view(session: Session) -> str:
+    blocked = APP._detector.is_blocked(session.username)
+    risk_score = session.risk_score
+    risk_color = "🔴 High" if risk_score > 50 else "🟢 Low"
+    access_level = "Restricted" if blocked else "Full Finance Access"
+    session_status = "Blocked" if blocked else "Secure"
+
+    if blocked:
+        body = f"""
+        <div class="card">
+          <div class="build-tag">{APP_BUILD}</div>
+          <h1>🚨 Access Restricted</h1>
+          <div class="banner deny">Finance access blocked due to suspicious behavior.</div>
+          <p><strong>Reasons:</strong></p>
+          <ul>
+            <li>Suspicious location detected 🌍</li>
+            <li>Risk score: {risk_score} {risk_color}</li>
+          </ul>
+          <div class="actions">
+            <form method="post" action="/confirm-suspicious" style="display:inline">
+              <input type="hidden" name="username" value="{html.escape(session.username)}">
+              <button type="submit">Approve via USSD 📱</button>
+            </form>
+            <a class="button" href="/chat?message=Why+am+I+blocked%3F">Ask Chatbot for Explanation 💬</a>
+          </div>
+        </div>
+        """
+    else:
+        # Calculate duration
+        now = datetime.now()
+        duration = now - session.login_time
+        duration_str = f"{duration.seconds // 60} mins"
+
+        body = f"""
+        <div class="card">
+          <div class="build-tag">{APP_BUILD}</div>
+          <h1>Access Granted ✅</h1>
+          <div class="banner allow">Access granted to finance_page.</div>
+          <p><strong>Role:</strong> {html.escape(session.role)}</p>
+          <p><strong>Zone:</strong> Finance</p>
+          <p><strong>Reasons:</strong></p>
+          <ul>
+            <li>Role matches required access ✔</li>
+            <li>Device trusted ✔</li>
+            <li>Risk score: {risk_score} ({risk_color}) ✔</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h2>💰 Financial Dashboard</h2>
+          <div class="grid">
+            <div class="tile"><strong>Total Transactions Today:</strong> 1,245</div>
+            <div class="tile"><strong>Flagged Transactions:</strong> 3 ⚠️</div>
+            <div class="tile"><strong>Last Access:</strong> {session.login_time.strftime("%H:%M %p")}</div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>🔐 Security Status</h2>
+          <div class="grid">
+            <div class="tile"><strong>Risk Score:</strong> {risk_score} {risk_color}</div>
+            <div class="tile"><strong>Access Level:</strong> {access_level}</div>
+            <div class="tile"><strong>Session Status:</strong> {session_status}</div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>🗺️ Visual Zone Map</h2>
+          <div class="zone-map">
+            <div class="zone user-zone blocked">User Zone<br>❌ Finance Zone</div>
+            <div class="zone finance-zone allowed">Finance Zone<br>✅ Finance Data</div>
+            <div class="zone ussd-zone blocked">USSD Zone<br>Limited Access Only</div>
+          </div>
+          <style>
+            .zone-map {{ display: flex; gap: 10px; justify-content: center; margin: 20px 0; }}
+            .zone {{ padding: 10px; border: 2px solid #ccc; border-radius: 8px; text-align: center; font-weight: bold; }}
+            .zone.allowed {{ background: #e7f6ec; color: #067647; border-color: #067647; }}
+            .zone.blocked {{ background: #fdecea; color: #b42318; border-color: #b42318; }}
+          </style>
+        </div>
+        </div>
+        <div class="card">
+          <h2>🔴 Live Security Panel</h2>
+          <div class="grid">
+            <div class="tile"><strong>User Risk Score:</strong> <span id="risk-score">{risk_score} {risk_color}</span></div>
+            <div class="tile"><strong>Status:</strong> <span id="status">{session_status}</span></div>
+            <div class="tile"><strong>Current Zone Access:</strong> User ❌ | Finance ✅ | Admin ❌</div>
+            <div class="tile"><strong>Active Alerts:</strong> <span id="alerts">{"Suspicious location + rapid access attempts" if blocked else "None"}</span></div>
+          </div>
+        </div>
+        <script>
+        setInterval(() => {{
+          fetch('/api/security-status')
+          .then(response => response.json())
+          .then(data => {{
+            document.getElementById('risk-score').textContent = data.risk_score + ' ' + data.risk_color;
+            document.getElementById('status').textContent = data.status;
+            document.getElementById('alerts').textContent = data.reason;
+          }})
+          .catch(error => console.error('Error updating security panel:', error));
+        }}, 2000);
+        </script>
+        </div>
+        <div class="card">
+          <h2>⏱️ Session Monitoring</h2>
+          <div class="grid">
+            <div class="tile"><strong>Login Time:</strong> {session.login_time.strftime("%H:%M %p")}</div>
+            <div class="tile"><strong>Active Duration:</strong> {duration_str}</div>
+            <div class="tile"><strong>Last Activity:</strong> Viewing transactions</div>
+          </div>
+        </div>
+        </div>
+        <div class="actions">
+          <a class="button" href="/chat?message=Why+do+I+have+access%3F">Explain This Access 💬</a>
+          <a class="button secondary" href="/dashboard">Back to Dashboard</a>
+        </div>
+        """
+
+    return page_template("Finance Page", body)
+
+
+def ussd_confirmation_view(session: Session) -> str:
+    body = f"""
+    <div class="card">
+      <div class="build-tag">{APP_BUILD}</div>
+      <h1>Suspicious Behavior Detected 🚨</h1>
+      <p>System has blocked access due to micro-segmentation.</p>
+      <p>SMS alert sent 📩. Confirm your identity via USSD to restore access.</p>
+      <form method="post" action="/confirm-suspicious">
+        <input type="hidden" name="username" value="{html.escape(session.username)}">
+        <div class="actions">
+          <button type="submit">Confirm via USSD 📱</button>
+        </div>
+      </form>
+      <div class="actions" style="margin-top:16px;">
+        <a class="button secondary" href="/chat">Ask Chatbot for Explanation 💬</a>
+      </div>
+    </div>
+    """
+    return page_template("USSD Confirmation", body)
+
+
+def ussd_interface_view(session: Session) -> str:
+    body = f"""
+    <div class="card">
+      <div class="build-tag">{APP_BUILD}</div>
+      <h1>USSD Simulation ☎️</h1>
+      <p>Simulate USSD menu navigation for security approvals and status checks.</p>
+      <div id="ussd-screen" class="ussd-screen">
+        <div class="ussd-display">
+          <p id="ussd-text">Dial *123# to start</p>
+        </div>
+        <div class="ussd-input">
+          <input type="text" id="ussd-input" placeholder="Enter code or option" />
+          <button id="ussd-submit">Send</button>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:16px;">
+        <a class="button secondary" href="/dashboard">Back to Dashboard</a>
+      </div>
+    </div>
+    <style>
+      .ussd-screen {{
+        border: 2px solid var(--accent);
+        border-radius: 12px;
+        padding: 20px;
+        background: #000;
+        color: #0f0;
+        font-family: 'Courier New', monospace;
+        margin-bottom: 20px;
+      }}
+      .ussd-display {{
+        background: #111;
+        padding: 15px;
+        border-radius: 8px;
+        min-height: 80px;
+        margin-bottom: 15px;
+      }}
+      .ussd-input {{
+        display: flex;
+        gap: 10px;
+      }}
+      .ussd-input input {{
+        flex: 1;
+        background: #111;
+        border: 1px solid #333;
+        color: #0f0;
+        padding: 8px 12px;
+        border-radius: 6px;
+      }}
+      .ussd-input button {{
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 6px;
+        cursor: pointer;
+      }}
+    </style>
+    <script>
+      let ussdState = 'idle';
+      const ussdText = document.getElementById('ussd-text');
+      const ussdInput = document.getElementById('ussd-input');
+      const ussdSubmit = document.getElementById('ussd-submit');
+
+      ussdSubmit.addEventListener('click', function() {{
+        const input = ussdInput.value.trim();
+        ussdInput.value = '';
+        processUSSD(input);
+      }});
+
+      ussdInput.addEventListener('keypress', function(e) {{
+        if (e.key === 'Enter') {{
+          e.preventDefault();
+          ussdSubmit.click();
+        }}
+      }});
+
+      function processUSSD(input) {{
+        ussdText.innerHTML = 'Processing...';
+        setTimeout(() => {{
+          if (ussdState === 'idle') {{
+            if (input === '*123#') {{
+              ussdText.innerHTML = 'Welcome to Micro-Segmentation USSD<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+              ussdState = 'menu';
+            }} else {{
+              ussdText.innerHTML = 'Invalid code. Dial *123# to start';
+            }}
+          }} else if (ussdState === 'menu') {{
+            if (input === '1') {{
+              ussdText.innerHTML = 'Status Check<br><br>User: {html.escape(session.username)}<br>Role: {html.escape(session.role)}<br>Zone: {html.escape(session.zone)}<br><br>Access: Granted<br><br>0. Back to Menu';
+              ussdState = 'status';
+            }} else if (input === '2') {{
+              ussdText.innerHTML = 'Login attempt from new location.<br><br>Approve?<br><br>1. Yes<br>2. No<br><br>Select option:';
+              ussdState = 'approve';
+            }} else {{
+              ussdText.innerHTML = 'Invalid option.<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+            }}
+          }} else if (ussdState === 'status') {{
+            if (input === '0') {{
+              ussdText.innerHTML = 'Welcome to Micro-Segmentation USSD<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+              ussdState = 'menu';
+            }} else {{
+              ussdText.innerHTML = 'Invalid option. 0. Back to Menu';
+            }}
+          }} else if (ussdState === 'approve') {{
+            if (input === '1') {{
+              ussdText.innerHTML = 'Login approved. Access granted.<br><br>Dial *123# to continue.';
+              ussdState = 'idle';
+            }} else if (input === '2') {{
+              ussdText.innerHTML = 'Login denied. Access blocked.<br><br>Dial *123# to continue.';
+              ussdState = 'idle';
+            }} else {{
+              ussdText.innerHTML = 'Invalid option.<br><br>Approve?<br><br>1. Yes<br>2. No<br><br>Select option:';
+            }}
+          }}
+        }}, 1000); // Simulate 1 second delay
+      }}
+    </script>
+    """
+    return page_template("USSD Simulation", body)
 
 
 def format_access_log(log: AccessLog) -> str:
@@ -699,10 +1159,24 @@ def chat_reply_for(
             "SMS is used for three security actions here: OTP verification during login, suspicious-login alerts, and account-lock notifications."
             + otp_hint
         )
-    if "suspicious" in text or "attack" in text or "behavior" in text or "blocked" in text:
+    if "why" in text.lower() and "blocked" in text.lower():
+        return "You were blocked because:\n\nLogin from new location 🌍\n5 rapid requests detected ⚠️\nRisk score exceeded threshold 🚨"
+    if (
+        "suspicious" in text
+        or "attack" in text
+        or "behavior" in text
+        or "blocked" in text
+    ):
+        blocked = app._detector.is_blocked(session.username)
+        if blocked:
+            return (
+                "You are currently blocked due to suspicious behavior. "
+                "Reasons include: Login from new location 🌍, rapid requests ⚠️, and risk score exceeded 🚨. "
+                "Confirm via USSD to restore access."
+            )
         return (
-            "When suspicious behavior is detected, the system flags the user, sends an SMS security alert, and blocks access to protected pages. "
-            "That is how the demo shows lateral movement being contained."
+            "Suspicious login detected 🚨: System blocks access (micro-segmentation), sends SMS alert 📩, user confirms via USSD 📱, and I explain what happened 💬. "
+            "This demonstrates how lateral movement is contained in the demo."
         )
     if "role" in text or "roles" in text or "permission" in text:
         return (
@@ -725,29 +1199,21 @@ def chat_reply_for(
             "Failed logins trigger alerts, and repeated failures can lock the account."
         )
     if "chat" in text or "bot" in text or "chatbot" in text:
-        return (
-            "This chat page is a users-zone assistant. It answers questions about the security model while still enforcing the same access policy as the rest of the demo."
-        )
+        return "This chat page is a users-zone assistant. It answers questions about the security model while still enforcing the same access policy as the rest of the demo."
     if "log" in text or "history" in text or "recent access" in text:
         if latest_log is None:
             return "There is no recent access history yet for your account. Open a protected page first, then ask again."
         return "Your latest recorded access event is: " + format_access_log(latest_log)
     if "what can i ask" in text or "help" in text:
-        return (
-            "You can ask about finance access, roles, zones, APIs, OTP verification, SMS alerts, suspicious behavior, your current role, or recent access history."
-        )
+        return "You can ask about finance access, roles, zones, APIs, OTP verification, SMS alerts, suspicious behavior, your current role, or recent access history."
     if "micro-segmentation" in text or "segmentation" in text:
         return (
             "Micro-segmentation breaks the environment into smaller trusted zones and restricts identities to approved paths. "
             "In this demo that means users cannot drift into finance or admin unless policy explicitly allows it."
         )
     if "demo" in text or "example" in text:
-        return (
-            "This demo shows browser login with SMS OTP, zone-based page protection, suspicious-behavior blocking, and a chatbot page that explains the model."
-        )
-    return (
-        "I can answer questions about zones, roles, finance access, APIs, OTP and SMS alerts, suspicious behavior, your current account, or recent access history."
-    )
+        return "This demo shows browser login with SMS OTP, zone-based page protection, suspicious-behavior blocking, and a chatbot page that explains the model."
+    return "I can answer questions about zones, roles, finance access, APIs, OTP and SMS alerts, suspicious behavior, your current account, or recent access history."
 
 
 def chat_view(session: Session) -> str:
@@ -765,7 +1231,9 @@ def chat_view(session: Session) -> str:
         if author == "user":
             transcript.append(f'<div class="bubble user">{html.escape(message)}</div>')
         elif author == "system":
-            transcript.append(f'<div class="bubble system">{html.escape(message)}</div>')
+            transcript.append(
+                f'<div class="bubble system">{html.escape(message)}</div>'
+            )
         else:
             transcript.append(
                 f'<div class="bubble bot"><strong>Assistant</strong>{html.escape(message)}</div>'
@@ -857,10 +1325,99 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             self._send_html(dashboard_view(session, message, status))
             return
         if parsed.path == "/finance":
-            self._serve_protected_page("finance_page", "Finance Page")
+            ajax = parse_qs(parsed.query).get("ajax", [""])[0] == "yes"
+            if ajax:
+                session = self._require_session()
+                if session is None:
+                    return
+                outcome = APP.access_page(session, "finance_page")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"decision": outcome.decision.value, "message": outcome.message}
+                    ).encode("utf-8")
+                )
+            else:
+                self._serve_protected_page("finance_page", "Finance Page")
             return
         if parsed.path == "/chat":
-            self._serve_chat_page()
+            ajax = parse_qs(parsed.query).get("ajax", [""])[0] == "yes"
+            if ajax:
+                session = self._require_session()
+                if session is None:
+                    return
+                outcome = APP.access_page(session, "chat_page")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"decision": outcome.decision.value, "message": outcome.message}
+                    ).encode("utf-8")
+                )
+            else:
+                self._serve_chat_page()
+            return
+        if parsed.path == "/ussd":
+            ajax = parse_qs(parsed.query).get("ajax", [""])[0] == "yes"
+            if ajax:
+                session = self._require_session()
+                if session is None:
+                    return
+                outcome = APP.access_page(session, "ussd_page")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"decision": outcome.decision.value, "message": outcome.message}
+                    ).encode("utf-8")
+                )
+            else:
+                self._serve_protected_page("ussd_page", "USSD Page")
+            return
+        if parsed.path == "/api/sms-inbox":
+            session = self._require_session()
+            if session is None:
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(sms_inbox_view(session.username).encode("utf-8"))
+            return
+        if parsed.path == "/api/security-status":
+            session = self._require_session()
+            if session is None:
+                return
+            blocked = APP._detector.is_blocked(session.username)
+            risk_score = 82 if blocked else 18
+            risk_color = "🔴 High" if risk_score > 50 else "🟢 Low"
+            status = "Restricted" if blocked else "Normal"
+            reason = (
+                "Suspicious location + rapid access attempts" if blocked else "None"
+            )
+            data = {
+                {
+                    "risk_score": risk_score,
+                    "risk_color": risk_color,
+                    "status": status,
+                    "reason": reason,
+                }
+            }
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode("utf-8"))
+            return
+            session = self._require_session()
+            if session is None:
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(sms_inbox_view(session.username).encode("utf-8"))
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Page not found")
@@ -871,7 +1428,8 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             fields = self._read_form()
             username = fields.get("username", [""])[0]
             password = fields.get("password", [""])[0]
-            outcome = APP.begin_login(username, password)
+            suspicious_location = fields.get("suspicious_location", [""])[0] == "on"
+            outcome = APP.begin_login(username, password, suspicious_location)
             if outcome.status == LoginStatus.OTP_REQUIRED:
                 PENDING_LOGIN_USERS.add(username)
                 self._send_html(
@@ -929,6 +1487,15 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if parsed.path == "/approve-admin-finance":
+            session = self._require_session()
+            if session and session.role == "super_admin":
+                APP.approved_admin_finance.add(session.username)
+                self._redirect(
+                    "/dashboard?message=Finance+access+approved+for+admin.&status=allow"
+                )
+            return
+
         if parsed.path == "/simulate-suspicious":
             session = self._require_session()
             if session is None:
@@ -945,7 +1512,9 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             PENDING_LOGIN_USERS.clear()
             CHAT_HISTORY.clear()
             self.send_response(HTTPStatus.SEE_OTHER)
-            self.send_header("Location", "/?message=Demo+state+reset.+All+users+are+unlocked.")
+            self.send_header(
+                "Location", "/?message=Demo+state+reset.+All+users+are+unlocked."
+            )
             self.send_header(
                 "Set-Cookie", f"{SESSION_COOKIE}=deleted; Max-Age=0; Path=/"
             )
@@ -979,7 +1548,8 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
                         json.dumps(
                             {
                                 "user": html.escape(message),
-                                "bot": "<strong>Assistant</strong>" + html.escape(bot_reply),
+                                "bot": "<strong>Assistant</strong>"
+                                + html.escape(bot_reply),
                             }
                         ).encode("utf-8")
                     )
@@ -1004,6 +1574,33 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             self._redirect("/chat")
             return
 
+        if parsed.path == "/confirm-suspicious":
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            if username:
+                APP._detector._blocked_users.discard(username)
+                APP._failed_logins[username] = 0
+                session = self._require_session()
+                if session and session.username == username:
+                    self._redirect(
+                        "/dashboard?message=Access+restored.+Check+SMS+inbox+and+chatbot.&status=allow"
+                    )
+                else:
+                    self._redirect("/?message=Access+restored.+Try+logging+in+again.")
+            else:
+                self._redirect("/")
+            return
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            if username == session.username:
+                APP._detector._blocked_users.discard(username)
+                self._redirect(
+                    "/dashboard?message=Access+restored.+Check+SMS+inbox+and+chatbot.&status=allow"
+                )
+            else:
+                self._redirect("/ussd")
+            return
+
         if parsed.path == "/logout":
             token = self._session_token()
             if token:
@@ -1016,6 +1613,85 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if parsed.path == "/request-ussd-otp":
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            if username and username in APP._identities:
+                ussd_otp = f"{secrets.randbelow(1000000):06d}"
+                APP._pending_ussd_otps[username] = ussd_otp
+                APP._sms_alerts.send(
+                    username,
+                    APP._identities[username].phone_number,
+                    "ussd_otp",
+                    f"Your USSD confirmation code is {ussd_otp}.",
+                )
+                self._redirect(
+                    f"/?message=USSD+confirmation+code+sent+by+SMS.&pending_user={username}"
+                )
+            else:
+                self._redirect("/")
+            return
+
+        if parsed.path == "/ussd-approve":
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            if username:
+                APP._detector._blocked_users.discard(username)
+                # After approve, send OTP for login
+                identity = APP._identities.get(username)
+                if identity:
+                    otp_code = f"{secrets.randbelow(1000000):06d}"
+                    APP._pending_otps[username] = otp_code
+                    APP._sms_alerts.send(
+                        identity.username,
+                        identity.phone_number,
+                        "otp",
+                        f"Your verification OTP is {otp_code}.",
+                    )
+                    PENDING_LOGIN_USERS.add(username)
+                    self._redirect(
+                        f"/?message=Approved.+OTP+sent+by+SMS.+Enter+it+below.&pending_user={username}"
+                    )
+                else:
+                    self._redirect("/")
+            else:
+                self._redirect("/")
+            return
+
+        if parsed.path == "/ussd-deny":
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            if username:
+                # Keep blocked, perhaps send SMS
+                identity = APP._identities.get(username)
+                if identity:
+                    APP._sms_alerts.send(
+                        identity.username,
+                        identity.phone_number,
+                        "access_denied",
+                        "Access denied from suspicious location.",
+                    )
+                self._redirect(
+                    f"/?message=Denied.+Access+remains+blocked.&pending_user={username}"
+                )
+            else:
+                self._redirect("/")
+            return
+
+        if parsed.path == "/verify-ussd-otp":
+            fields = self._read_form()
+            username = fields.get("username", [""])[0]
+            ussd_code = fields.get("ussd_code", [""])[0]
+            expected = APP._pending_ussd_otps.get(username)
+            if expected and expected == ussd_code:
+                APP._pending_ussd_otps.pop(username, None)
+                APP._detector._blocked_users.discard(username)
+                APP._failed_logins[username] = 0
+                self._redirect("/?message=Confirmed.+Try+logging+in+again.")
+            else:
+                self._redirect(f"/?message=Invalid+USSD+code.&pending_user={username}")
+            return
+
         self.send_error(HTTPStatus.NOT_FOUND, "Page not found")
 
     def log_message(self, format: str, *args: object) -> None:
@@ -1026,9 +1702,21 @@ class MicroSegmentationHandler(BaseHTTPRequestHandler):
         if session is None:
             return
         outcome = APP.access_page(session, page)
-        self._send_html(
-            resource_view(title, outcome.message, outcome.decision.value == "allow")
-        )
+        if outcome.decision != Decision.ALLOW:
+            self._send_html(
+                resource_view(title, outcome.message, False),
+                status=HTTPStatus.FORBIDDEN,
+            )
+        else:
+            if page == "ussd_page":
+                if APP._detector.is_blocked(session.username):
+                    self._send_html(ussd_confirmation_view(session))
+                else:
+                    self._send_html(ussd_interface_view(session))
+            elif page == "finance_page":
+                self._send_html(finance_view(session))
+            else:
+                self._send_html(resource_view(title, outcome.message, True))
 
     def _serve_chat_page(self) -> None:
         session = self._require_session()

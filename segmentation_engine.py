@@ -57,6 +57,8 @@ class Session:
     username: str
     role: str
     zone: str
+    login_time: datetime
+    risk_score: int
 
 
 @dataclass(frozen=True)
@@ -160,9 +162,7 @@ class SmsAlertService:
             )
         )
 
-    def latest_for(
-        self, username: str, category: str | None = None
-    ) -> SmsAlert | None:
+    def latest_for(self, username: str, category: str | None = None) -> SmsAlert | None:
         for alert in reversed(self._alerts):
             if alert.username != username:
                 continue
@@ -193,9 +193,11 @@ class MicroSegmentationApp:
         self._detector = detector or SuspiciousActivityDetector()
         self._sms_alerts = sms_alerts or SmsAlertService()
         self._pending_otps: dict[str, str] = {}
+        self._pending_ussd_otps: dict[str, str] = {}
         self._failed_logins: dict[str, int] = {}
         self._lock_threshold = 3
         self._access_logs: list[AccessLog] = []
+        self.approved_admin_finance: set[str] = set()
 
     def login(self, username: str, password: str) -> Session | None:
         identity = self._identities.get(username)
@@ -210,13 +212,18 @@ class MicroSegmentationApp:
             self._notify_account_locked(identity)
             return None
 
+        risk_score = 82 if self._detector.is_blocked(username) else 18
         return Session(
             username=identity.username,
             role=identity.role,
             zone=identity.home_zone,
+            login_time=datetime.now(),
+            risk_score=risk_score,
         )
 
-    def begin_login(self, username: str, password: str) -> LoginOutcome:
+    def begin_login(
+        self, username: str, password: str, suspicious_location: bool = False
+    ) -> LoginOutcome:
         identity = self._identities.get(username)
         if identity is None:
             return LoginOutcome(LoginStatus.DENIED, "Invalid username or password.")
@@ -237,14 +244,27 @@ class MicroSegmentationApp:
                 LoginStatus.DENIED, "Invalid username or password. SMS alert sent."
             )
 
+        suspicious_location = suspicious_location  # param
+        if suspicious_location:
+            self.simulate_suspicious_behavior(username)
+            return LoginOutcome(
+                LoginStatus.DENIED,
+                "Suspicious location detected. SMS alert sent. Use USSD to approve or deny.",
+            )
+
         self._failed_logins[username] = 0
         otp_code = f"{secrets.randbelow(1000000):06d}"
         self._pending_otps[username] = otp_code
+        message = (
+            f"⚠️ Suspicious login detected. Your verification OTP is {otp_code}."
+            if suspicious_location
+            else f"Your verification OTP is {otp_code}."
+        )
         self._sms_alerts.send(
             identity.username,
             identity.phone_number,
             "otp",
-            f"Your verification OTP is {otp_code}.",
+            message,
         )
         return LoginOutcome(LoginStatus.OTP_REQUIRED, "OTP sent by SMS.")
 
@@ -264,20 +284,32 @@ class MicroSegmentationApp:
             return LoginOutcome(LoginStatus.DENIED, "Invalid OTP.")
 
         self._pending_otps.pop(username, None)
+        risk_score = 82 if self._detector.is_blocked(username) else 18
         session = Session(
             username=identity.username,
             role=identity.role,
             zone=identity.home_zone,
+            login_time=datetime.now(),
+            risk_score=risk_score,
         )
         return LoginOutcome(LoginStatus.SUCCESS, "Login successful.", session=session)
 
     def access_page(
         self, session: Session, page: str, action: str = "read"
     ) -> AccessOutcome:
-        if self._detector.is_blocked(session.username) and page != "chat_page":
+        if self._detector.is_blocked(session.username) and page not in [
+            "chat_page",
+            "ussd_page",
+        ]:
             return AccessOutcome(
                 Decision.DENY, "Suspicious behavior detected. Access blocked."
             )
+
+        if session.role == "super_admin" and page == "finance_page":
+            if session.username not in self.approved_admin_finance:
+                return AccessOutcome(
+                    Decision.DENY, "Admin access to finance requires USSD approval."
+                )
 
         service = self._page_to_service.get(page)
         if service is None:
@@ -305,6 +337,8 @@ class MicroSegmentationApp:
         self._access_logs.append(log)
 
         if decision == Decision.ALLOW:
+            if session.role == "super_admin" and page == "finance_page":
+                self._notify_admin_access(session)
             return AccessOutcome(Decision.ALLOW, f"Access granted to {page}.")
 
         return AccessOutcome(Decision.DENY, f"Access denied to {page}.")
@@ -317,7 +351,7 @@ class MicroSegmentationApp:
                 identity.username,
                 identity.phone_number,
                 "security_alert",
-                "Suspicious activity detected on your account. Access has been blocked.",
+                "⚠️ Suspicious login from new location detected. Confirm via USSD.",
             )
 
     def sms_alerts_for(self, username: str) -> list[SmsAlert]:
@@ -339,6 +373,7 @@ class MicroSegmentationApp:
         self._detector.clear()
         self._sms_alerts.clear()
         self._pending_otps.clear()
+        self._pending_ussd_otps.clear()
         self._failed_logins.clear()
         self._access_logs.clear()
 
@@ -360,8 +395,18 @@ class MicroSegmentationApp:
             identity.username,
             identity.phone_number,
             "account_lock",
-            f"Account locked for {identity.username}. Contact support to regain access.",
+            "🚨 Account locked due to failed login attempts.",
         )
+
+    def _notify_admin_access(self, session: Session) -> None:
+        identity = self._identities.get(session.username)
+        if identity is not None:
+            self._sms_alerts.send(
+                identity.username,
+                identity.phone_number,
+                "admin_access",
+                f"Admin access to finance granted at {datetime.now().strftime('%H:%M %p')}.",
+            )
 
 
 def default_identities() -> dict[str, Identity]:

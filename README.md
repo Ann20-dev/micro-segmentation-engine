@@ -1,88 +1,112 @@
-# Micro-Segmentation Engine
+# 🔐 Micro-Segmentation Engine
 
-A small Python policy engine that demonstrates micro-segmentation across three security zones and the following talking APIs:
+> Zero-trust access control for telecom APIs with SMS-based security alerts
 
-- `SMS`
-- `USSD`
-- `Airtime`
-- `Voice`
-- `Insights`
-- `Chat`
+## The Problem
 
-The engine enforces strict role-based access so that:
+Traditional network security assumes everything inside the perimeter is trusted. But in a world of breaches and lateral movement, that's a dangerous assumption. This project demonstrates **micro-segmentation** — a security architecture where every API call is explicitly verified, regardless of where it originates.
 
-- each identity is pinned to a home zone
-- each API is pinned to a specific zone
-- cross-zone access must be explicitly allowed
-- compromised accounts have limited lateral movement
-- SMS is used for security alerts and OTP verification
+## What This Project Does
 
-## Security Model
+This is a **Python policy engine** that enforces zero-trust access control across three security zones:
 
-### Zones
+| Zone | Purpose | APIs |
+|------|---------|------|
+| `admin` | Privileged systems & admin tooling | Insights |
+| `finance` | Payment, billing & accounting | — |
+| `users` | User-facing communications | SMS, USSD, Chat |
 
-- `admin`: privileged systems and administrative tooling
-- `finance`: payment, billing, airtime, and accounting systems
-- `users`: user-facing applications and communications services
+### Key Security Features
 
-### API Placement
+- **Identity pinning** — each user is locked to their home zone
+- **API isolation** — services can only be accessed from their designated zone
+- **Explicit cross-zone access** — movement between zones requires explicit policy
+- **Lateral movement containment** — compromised accounts are confined to their zone
+- **SMS security alerts** — real-time notifications for:
+  - Suspicious login detection
+  - Account lockout after failed attempts
+  - OTP delivery for multi-factor authentication
 
-- `Insights` is segmented into `admin`
-- `Airtime` is segmented into `finance`
-- `SMS`, `USSD`, `Voice`, and `Chat` are segmented into `users`
+## Architecture Highlights
 
-### SMS Security Use Cases
-
-- suspicious login detected: send SMS alert to the user
-- account locked after repeated failed logins: send SMS notification
-- successful password check: send OTP by SMS before browser login completes
-
-### Roles
-
-- `super_admin`: full administrative access across all zones
-- `admin_operator`: administrative access limited to the `admin` zone
-- `finance_analyst`: finance access limited to the `finance` zone
-- `finance_auditor`: read-only finance access
-- `support_agent`: operational access limited to the `users` zone
-- `end_user`: self-service access limited to the `users` zone
-
-## Files
-
-- `segmentation_engine.py`: policy model and access enforcement
-- `test_segmentation_engine.py`: tests that verify isolation and limited movement
-
-## Run
-
-```powershell
-python main.py
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Segmentation Policy                      │
+├─────────────────────────────────────────────────────────────┤
+│  Role Policies    │  Service Policies   │  Zone Enforcement │
+│  ─────────────    │  ────────────────   │  ──────────────── │
+│  super_admin      │  SMS  → users       │  Identity → Zone  │
+│  admin_operator   │  USSD → users       │  API    → Zone    │
+│  finance_analyst  │  Chat → users       │  Cross-zone check │
+│  finance_auditor  │                     │                   │
+│  support_agent    │                     │                   │
+│  end_user         │                     │                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-To run it in your browser:
+## Quick Start
 
 ```powershell
+# Run the CLI demo
+python main.py
+
+# Launch the web interface
 python web_app.py
 ```
 
-Then open `http://127.0.0.1:8000` in your browser.
+Then open **http://127.0.0.1:8000** in your browser.
 
-Browser login flow:
+### Demo Credentials
 
-1. Enter username and password.
-2. Read the OTP from the local SMS inbox shown on the login page.
-3. Submit the OTP to complete login.
-4. Open `Finance Page` or simulate suspicious behavior and review the SMS inbox updates.
+| Username | Password | Role |
+|----------|----------|------|
+| `normal_user` | `user123` | end_user |
+| `finance_user` | `finance123` | finance_analyst |
+| `admin_user` | `admin123` | admin_operator |
 
-Default browser demo user:
+### Browser Demo Flow
 
-- `normal_user` / `user123` / `0711731098`
-- `finance_user` / `finance123` / `0711731098`
-- `admin_user` / `admin123` / `0711731098`
+1. Login with credentials above
+2. Retrieve OTP from the on-page SMS inbox
+3. Submit OTP to complete authentication
+4. Try accessing pages outside your zone — watch the denial
+5. Trigger "suspicious behavior" and see SMS alerts appear
 
-To run the tests:
+### Run Tests
 
 ```powershell
 python -m unittest -v
 ```
+
+## Why This Matters for Hackathons
+
+- ✅ **Real security concept** — micro-segmentation is industry-standard (used by Google, AWS, Azure)
+- ✅ **Interactive demo** — tangible web UI shows policy enforcement in action
+- ✅ **SMS integration** — demonstrates multi-factor auth & alert workflows
+- ✅ **Extensible** — easy to add new roles, zones, or APIs
+- ✅ **Python-native** — clean, readable code that's easy to present
+
+## Project Structure
+
+```
+├── segmentation_engine.py    # Core policy engine & data models
+├── test_segmentation_engine.py  # Unit tests for isolation guarantees
+├── main.py                   # CLI demo runner
+├── web_app.py                # Web interface with login flow
+├── README.md                 # This file
+└── requirements.txt          # Python dependencies
+```
+
+## Tech Stack
+
+- **Python 3.10+** — core engine
+- **Flask + Flask-CORS** — web framework
+- **Built-in http.server** — no heavy dependencies
+- **Vanilla HTML/JS** — simple, portable frontend
+
+---
+
+**Built for security engineers, demonstrated for hackers.** 🚀
 
 ## Example
 
