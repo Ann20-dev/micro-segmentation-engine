@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 from datetime import datetime
 import html
@@ -1774,4 +1775,6 @@ def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
 
 
 if __name__ == "__main__":
-    run_server()
+    host = os.environ.get('HOST', '127.0.0.1')
+    port = int(os.environ.get('PORT', 8000))
+    run_server(host, port)
