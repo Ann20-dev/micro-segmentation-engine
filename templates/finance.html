@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block body %}
+{% if blocked %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>🚨 Access Restricted</h1>
+  <div class="banner deny">Finance access blocked due to suspicious behavior.</div>
+  <p><strong>Reasons:</strong></p>
+  <ul>
+    <li>Suspicious location detected 🌍</li>
+    <li>Risk score: {{ risk_score }} {{ risk_color }}</li>
+  </ul>
+  <div class="actions">
+    <form method="post" action="{{ url_for('confirm_suspicious') }}" style="display:inline">
+      <input type="hidden" name="username" value="{{ session.username }}">
+      <button type="submit">Approve via USSD 📱</button>
+    </form>
+    <a class="button" href="/chat?message=Why+am+I+blocked%3F">Ask Chatbot for Explanation 💬</a>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>Access Granted ✅</h1>
+  <div class="banner allow">Access granted to finance_page.</div>
+  <p><strong>Role:</strong> {{ session.role }}</p>
+  <p><strong>Zone:</strong> Finance</p>
+  <p><strong>Reasons:</strong></p>
+  <ul>
+    <li>Role matches required access ✔</li>
+    <li>Device trusted ✔</li>
+    <li>Risk score: {{ risk_score }} ({{ risk_color }}) ✔</li>
+  </ul>
+</div>
+<div class="card">
+  <h2>💰 Financial Dashboard</h2>
+  <div class="grid">
+    <div class="tile"><strong>Total Transactions Today:</strong> 1,245</div>
+    <div class="tile"><strong>Flagged Transactions:</strong> 3 ⚠️</div>
+    <div class="tile"><strong>Last Access:</strong> {{ session.login_time.strftime("%H:%M %p") }}</div>
+  </div>
+</div>
+<div class="card">
+  <h2>🔐 Security Status</h2>
+  <div class="grid">
+    <div class="tile"><strong>Risk Score:</strong> {{ risk_score }} {{ risk_color }}</div>
+    <div class="tile"><strong>Access Level:</strong> {{ access_level }}</div>
+    <div class="tile"><strong>Session Status:</strong> {{ session_status }}</div>
+  </div>
+</div>
+<div class="card">
+  <h2>🗺️ Visual Zone Map</h2>
+  <div class="zone-map">
+    <div class="zone user-zone blocked">User Zone<br>❌ Finance Zone</div>
+    <div class="zone finance-zone allowed">Finance Zone<br>✅ Finance Data</div>
+    <div class="zone ussd-zone blocked">USSD Zone<br>Limited Access Only</div>
+  </div>
+  <style>
+    .zone-map { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+    .zone { padding: 10px; border: 2px solid #ccc; border-radius: 8px; text-align: center; font-weight: bold; }
+    .zone.allowed { background: #e7f6ec; color: #067647; border-color: #067647; }
+    .zone.blocked { background: #fdecea; color: #b42318; border-color: #b42318; }
+  </style>
+</div>
+<div class="card">
+  <h2>🔴 Live Security Panel</h2>
+  <div class="grid">
+    <div class="tile"><strong>User Risk Score:</strong> <span id="risk-score">{{ risk_score }} {{ risk_color }}</span></div>
+    <div class="tile"><strong>Status:</strong> <span id="status">{{ session_status }}</span></div>
+    <div class="tile"><strong>Current Zone Access:</strong> User ❌ | Finance ✅ | Admin ❌</div>
+    <div class="tile"><strong>Active Alerts:</strong> <span id="alerts">{{ alerts }}</span></div>
+  </div>
+</div>
+<script>
+setInterval(() => {
+  fetch('/api/security-status')
+  .then(response => response.json())
+  .then(data => {
+    document.getElementById('risk-score').textContent = data.risk_score + ' ' + data.risk_color;
+    document.getElementById('status').textContent = data.status;
+    document.getElementById('alerts').textContent = data.reason;
+  })
+  .catch(error => console.error('Error updating security panel:', error));
+}, 2000);
+</script>
+<div class="card">
+  <h2>⏱️ Session Monitoring</h2>
+  <div class="grid">
+    <div class="tile"><strong>Login Time:</strong> {{ session.login_time.strftime("%H:%M %p") }}</div>
+    <div class="tile"><strong>Active Duration:</strong> {{ duration_str }}</div>
+    <div class="tile"><strong>Last Activity:</strong> Viewing transactions</div>
+  </div>
+</div>
+<div class="actions">
+  <a class="button" href="/chat?message=Why+do+I+have+access%3F">Explain This Access 💬</a>
+  <a class="button secondary" href="/dashboard">Back to Dashboard</a>
+</div>
+{% endif %}
+{% endblock %}

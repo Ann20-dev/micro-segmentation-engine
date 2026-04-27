@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>{{ title }}</h1>
+  <div class="banner {{ "allow" if allowed else "deny" }}">{{ outcome_message }}</div>
+  <div class="actions">
+    <a class="button secondary" href="{{ back_path }}">Back to Dashboard</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>USSD Simulation ☎️</h1>
+  <p>Simulate USSD menu navigation for security approvals and status checks.</p>
+  <div id="ussd-screen" class="ussd-screen">
+    <div class="ussd-display">
+      <p id="ussd-text">Dial *123# to start</p>
+    </div>
+    <div class="ussd-input">
+      <input type="text" id="ussd-input" placeholder="Enter code or option" />
+      <button id="ussd-submit">Send</button>
+    </div>
+  </div>
+  <div class="actions" style="margin-top:16px;">
+    <a class="button secondary" href="/dashboard">Back to Dashboard</a>
+  </div>
+</div>
+<style>
+  .ussd-screen {
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 20px;
+    background: #000;
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    margin-bottom: 20px;
+  }
+  .ussd-display {
+    background: #111;
+    padding: 15px;
+    border-radius: 8px;
+    min-height: 80px;
+    margin-bottom: 15px;
+  }
+  .ussd-input {
+    display: flex;
+    gap: 10px;
+  }
+  .ussd-input input {
+    flex: 1;
+    background: #111;
+    border: 1px solid #333;
+    color: #0f0;
+    padding: 8px 12px;
+    border-radius: 6px;
+  }
+  .ussd-input button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+</style>
+<script>
+  let ussdState = 'idle';
+  const ussdText = document.getElementById('ussd-text');
+  const ussdInput = document.getElementById('ussd-input');
+  const ussdSubmit = document.getElementById('ussd-submit');
+
+  ussdSubmit.addEventListener('click', function() {
+    const input = ussdInput.value.trim();
+    ussdInput.value = '';
+    processUSSD(input);
+  });
+
+  ussdInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      ussdSubmit.click();
+    }
+  });
+
+  function processUSSD(input) {
+    ussdText.innerHTML = 'Processing...';
+    setTimeout(() => {
+      if (ussdState === 'idle') {
+        if (input === '*123#') {
+          ussdText.innerHTML = 'Welcome to Micro-Segmentation USSD<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+          ussdState = 'menu';
+        } else {
+          ussdText.innerHTML = 'Invalid code. Dial *123# to start';
+        }
+      } else if (ussdState === 'menu') {
+        if (input === '1') {
+          ussdText.innerHTML = 'Status Check<br><br>User: {{ session.username }}<br>Role: {{ session.role }}<br>Zone: {{ session.zone }}<br><br>Access: Granted<br><br>0. Back to Menu';
+          ussdState = 'status';
+        } else if (input === '2') {
+          ussdText.innerHTML = 'Login attempt from new location.<br><br>Approve?<br><br>1. Yes<br>2. No<br><br>Select option:';
+          ussdState = 'approve';
+        } else {
+          ussdText.innerHTML = 'Invalid option.<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+        }
+      } else if (ussdState === 'status') {
+        if (input === '0') {
+          ussdText.innerHTML = 'Welcome to Micro-Segmentation USSD<br><br>1. Check Status<br>2. Approve Login<br><br>Select option:';
+          ussdState = 'menu';
+        } else {
+          ussdText.innerHTML = 'Invalid option. 0. Back to Menu';
+        }
+      } else if (ussdState === 'approve') {
+        if (input === '1') {
+          ussdText.innerHTML = 'Login approved. Access granted.<br><br>Dial *123# to continue.';
+          ussdState = 'idle';
+        } else if (input === '2') {
+          ussdText.innerHTML = 'Login denied. Access blocked.<br><br>Dial *123# to continue.';
+          ussdState = 'idle';
+        } else {
+          ussdText.innerHTML = 'Invalid option.<br><br>Approve?<br><br>1. Yes<br>2. No<br><br>Select option:';
+        }
+      }
+    }, 1000); // Simulate 1 second delay
+  }
+</script>
+{% endblock %}

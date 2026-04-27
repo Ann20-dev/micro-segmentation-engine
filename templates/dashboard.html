@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>Welcome, {{ session.username }}</h1>
+  <p class="meta">Role: {{ session.role }} | Zone: {{ session.zone }}</p>
+  <div class="status-indicator {{ status_class }}">{{ status_text }}</div>
+  {% if message %}
+  <div class="banner {{ banner_class }}">{{ message }}</div>
+  {% endif %}
+  <div class="card">
+    <h2>🗺️ Zone Visualization</h2>
+    <div class="zone-map">
+      <div class="zone user-zone {{ user_zone_class }}">User Zone<br>{% if session.zone == "user" %}✅ (Active){% else %}❌{% endif %}</div>
+      <div class="zone finance-zone {{ finance_zone_class }}">Finance Zone<br>{% if session.zone == "finance" %}✅ (Active){% else %}❌{% endif %}</div>
+      <div class="zone admin-zone {{ admin_zone_class }}">Admin Zone<br>{% if session.zone == "admin" %}✅ (Active){% else %}❌{% endif %}</div>
+      <div class="zone ussd-zone limited">USSD Zone<br>⚠ Limited</div>
+    </div>
+     <style>
+       .zone-map { display: flex; gap: 10px; justify-content: center; margin: 20px 0; }
+       .zone { padding: 10px; border: 2px solid #ccc; border-radius: 8px; text-align: center; font-weight: bold; }
+       .zone.allowed { background: #e7f6ec; color: #067647; border-color: #067647; }
+       .zone.blocked { background: #fdecea; color: #b42318; border-color: #b42318; }
+       .zone.limited { background: #fffbeb; color: #d97706; border-color: #d97706; }
+     </style>
+   </div>
+   <div class="actions">
+    <a class="button" href="/finance">Try Finance Page</a>
+    <a class="button secondary" href="/ussd">Try USSD Page</a>
+    <a class="button secondary" href="/chat">Open Chat Page</a>
+    <form method="post" action="{{ url_for('simulate_suspicious') }}" style="display:inline">
+      <button class="danger" type="submit">Simulate Suspicious Behavior</button>
+    </form>
+    <form method="post" action="{{ url_for('reset_demo') }}" style="display:inline">
+      <button class="button secondary" type="submit">Reset Demo</button>
+    </form>
+    {% if session.role == "super_admin" %}
+    <form method="post" action="{{ url_for('approve_admin_finance') }}" style="display:inline"> <button class="button secondary" type="submit">Approve Finance Access</button> </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('logout') }}" style="display:inline">
+      <button class="button secondary" type="submit">Logout</button>
+    </form>
+  </div>
+</div>
+<div class="card">
+  <h2>Expected Flow</h2>
+  <div class="grid">
+    <div class="tile">`normal_user` opening finance should be denied.</div>
+    <div class="tile">`finance_user` opening finance should be granted.</div>
+    <div class="tile">USSD: Status checks, Approvals, Limited actions. No Database ❌, No Admin panel ❌.</div>
+    <div class="tile">Failed login: USSD → request action 📱, SMS → send OTP 📩, Backend → verify.</div>
+    <div class="tile">Suspicious location: User logs in 🌍, system flags 🚨, USSD prompt ☎️, approve/deny, dynamic access 🔐.</div>
+    <div class="tile">Suspicious behavior simulation 🚨 blocks access, sends SMS 📩, user confirms via USSD 📱, chatbot explains 💬.</div>
+  </div>
+</div>
+<div class="card">
+  <h2>SMS Inbox</h2>
+  <div class="grid" id="sms-inbox">
+    {{ sms_inbox | safe }}
+  </div>
+</div>
+{% if session.role == "super_admin" %}
+<div class="card">
+  <h2>Admin Access Log</h2>
+  <div class="insight-list">
+    {% for log in access_logs %}
+    <div class="insight-item">{{ log }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+<script>
+async function checkAccess(url, redirectUrl) {
+  const response = await fetch(url + '?ajax=yes');
+  const data = await response.json();
+  if (data.decision === 'deny') {
+    alert('🚨 Access Blocked: ' + data.message);
+    return false;
+  } else {
+    window.location.href = redirectUrl;
+    return true;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  const financeLink = document.querySelector('a[href="/finance"]');
+  if (financeLink) {
+    financeLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      checkAccess('/finance', '/finance');
+    });
+  }
+  const ussdLink = document.querySelector('a[href="/ussd"]');
+  if (ussdLink) {
+    ussdLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      checkAccess('/ussd', '/ussd');
+    });
+  }
+  const chatLink = document.querySelector('a[href="/chat"]');
+  if (chatLink) {
+    chatLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      checkAccess('/chat', '/chat');
+    });
+  }
+  const simulateForm = document.querySelector('form[action="/simulate-suspicious"]');
+  if (simulateForm) {
+    simulateForm.addEventListener('submit', function(e) {
+      alert('🚨 Simulating suspicious behavior... Access will be blocked!');
+    });
+  }
+  const resetForm = document.querySelector('form[action="/reset-demo"]');
+  if (resetForm) {
+    resetForm.addEventListener('submit', function(e) {
+      if (!confirm('Reset the demo? This will clear all sessions and data.')) {
+        e.preventDefault();
+      }
+    });
+  }
+  const logoutForm = document.querySelector('form[action="/logout"]');
+  if (logoutForm) {
+    logoutForm.addEventListener('submit', function(e) {
+      if (!confirm('Logout?')) {
+        e.preventDefault();
+      }
+    });
+  }
+
+  async function refreshSMS() {
+    try {
+      const response = await fetch('/api/sms-inbox');
+      if (response.ok) {
+        const html = await response.text();
+        document.getElementById('sms-inbox').innerHTML = html;
+      }
+    } catch (error) {
+      console.error('Failed to refresh SMS:', error);
+    }
+  }
+
+  // Refresh immediately if there's a deny banner (e.g., after simulation)
+  if (document.querySelector('.banner.deny')) {
+    refreshSMS();
+  }
+
+  setInterval(refreshSMS, 5000); // Refresh every 5 seconds
+});
+</script>
+{% endblock %}

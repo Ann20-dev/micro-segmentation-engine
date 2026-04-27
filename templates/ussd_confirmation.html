@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>Suspicious Behavior Detected 🚨</h1>
+  <p>System has blocked access due to micro-segmentation.</p>
+  <p>SMS alert sent 📩. Confirm your identity via USSD to restore access.</p>
+  <form method="post" action="{{ url_for('confirm_suspicious') }}">
+    <input type="hidden" name="username" value="{{ session.username }}">
+    <div class="actions">
+      <button type="submit">Confirm via USSD 📱</button>
+    </div>
+  </form>
+  <div class="actions" style="margin-top:16px;">
+    <a class="button secondary" href="/chat">Ask Chatbot for Explanation 💬</a>
+  </div>
+</div>
+{% endblock %}

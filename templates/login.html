@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="card">
+  <div class="build-tag">{{ app_build }}</div>
+  <h1>Micro-Segmentation Engine</h1>
+  <p class="meta">Login with a role-based demo account, receive an SMS OTP, and test browser access control.</p>
+  {% if message %}
+  <div class="banner deny">{{ message }}</div>
+  {% endif %}
+  <div class="actions" style="margin-bottom:16px;">
+    <form method="post" action="{{ url_for('reset_demo') }}" style="display:inline">
+      <button class="button secondary" type="submit">Reset Demo</button>
+    </form>
+  </div>
+  <form method="post" action="{{ url_for('index') }}">
+    <label>Username
+      <input name="username" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <label>
+      <input type="checkbox" name="suspicious_location"> Login from suspicious location 🌍
+    </label>
+    <div class="actions">
+      <button type="submit">Login</button>
+    </div>
+  </form>
+</div>
+{% if otp_panel %}
+{{ otp_panel | safe }}
+{% endif %}
+{% if ussd_panel %}
+{{ ussd_panel | safe }}
+{% endif %}
+<div class="card">
+  <h2>Demo Users</h2>
+  <div class="grid">
+    <div class="tile"><strong>normal_user</strong><br><span class="meta">Password: user123</span><br><span class="meta">Phone: 0711731098</span></div>
+    <div class="tile"><strong>finance_user</strong><br><span class="meta">Password: finance123</span><br><span class="meta">Phone: 0711731098</span></div>
+    <div class="tile"><strong>admin_user</strong><br><span class="meta">Password: admin123</span><br><span class="meta">Phone: 0711731098</span></div>
+  </div>
+</div>
+<div class="card">
+  <h2>Local SMS Inbox</h2>
+  <div class="grid">
+    {{ sms_inbox | safe }}
+  </div>
+  {% if pending_user and latest_otp_code %}
+  <div class="meta" data-latest-otp="{{ latest_otp_code }}">Demo helper ready: click Use Latest OTP.</div>
+  {% endif %}
+</div>
+{% endblock %}

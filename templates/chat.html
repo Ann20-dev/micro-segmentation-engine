@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="chat-shell">
+  <section class="chat-stage">
+    <div class="chat-topbar">
+      <div class="chat-title">
+        <div class="chat-orb"></div>
+        <div>
+          <h1 style="margin:0;font-size:1.5rem;">Secure Chat Console</h1>
+          <div style="opacity:0.9;">User: {{ session.username }} | Zone: {{ session.zone }} | {{ app_build }}</div>
+        </div>
+      </div>
+      <a class="button secondary" href="/dashboard">Back</a>
+    </div>
+    <div class="chat-log">
+      {% for bubble in transcript %}
+      {{ bubble | safe }}
+      {% endfor %}
+      <div class="bubble bot typing-indicator" id="typing-indicator"><span></span><span></span><span></span></div>
+    </div>
+    <div class="chat-composer" style="padding-bottom:0;">
+      <div class="composer-top">
+        <div class="chat-status" id="chat-status">Ask anything. Older chats stay visible, but the assistant only uses recent context.</div>
+        <div class="chat-toolbar">
+          <form method="post" action="{{ url_for('clear_chat') }}" style="display:inline">
+            <button class="button secondary" type="submit">Clear Chat</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <form class="chat-composer" id="chat-form" method="post" action="{{ url_for('chat_message') }}">
+      <label>Message
+        <textarea name="message" placeholder="Ask a question like: Why am I denied finance access? How does OTP work? What is my role?" required></textarea>
+      </label>
+      <div class="chip-row">
+        <button class="chip" type="button" data-quick-message="Why is finance access restricted?">Why is finance access restricted?</button>
+        <button class="chip" type="button" data-quick-message="How does SMS OTP work here?">How does SMS OTP work here?</button>
+        <button class="chip" type="button" data-quick-message="What happens during suspicious behavior?">What happens during suspicious behavior?</button>
+        <button class="chip" type="button" data-quick-message="What are the security zones?">What are the security zones?</button>
+        <button class="chip" type="button" data-quick-message="Explain user roles">Explain user roles</button>
+        <button class="chip" type="button" data-quick-message="How does micro-segmentation work?">How does micro-segmentation work?</button>
+      </div>
+      <div class="actions">
+        <button type="submit">Send Message</button>
+      </div>
+    </form>
+  </section>
+  <aside class="side-stack">
+    <div class="card">
+      <h2>Chat Status</h2>
+      <p class="meta">This page behaves like a chatbot while still honoring the same zone-based access policy. Previous chats remain on screen, but follow-up logic only uses the latest part of the conversation.</p>
+      <div class="banner allow">Access granted to chat_page.</div>
+    </div>
+    <div class="card">
+      <h2>Suggested Topics</h2>
+      <div class="insight-list">
+        <div class="insight-item">Ask about why some users are denied finance access.</div>
+        <div class="insight-item">Ask how SMS OTP and account-lock alerts work.</div>
+        <div class="insight-item">Ask for your current role, zone, or recent access history.</div>
+        <div class="insight-item">Ask how APIs and services are divided across zones.</div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>SMS Inbox</h2>
+      <div class="grid">
+        {{ sms_inbox | safe }}
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}
